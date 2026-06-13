@@ -71,8 +71,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      # Passo 2: Cria uma pasta temporária na ec2 para receber os arquivos
-      - name: Copy files to EC2 Temporary Folder via SCP
+      # Passo 2: Transfere os arquivos do projeto para a ec2
+      - name: Copy files to EC2 via SCP
         uses: appleboy/scp-action@v1
         with:
           # Injeta o IP público atual da instância ec2, que está salvo no GitHub Secrets
@@ -83,11 +83,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           # Define a origem dos arquivos (nesse caso pega tudo o que está na raiz do projeto)
           source: "./*"
-          # Define o destino exato dentro do servidor Linux, que será uma pasta temporária
-          target: "/home/ec2-user/new_version"
+          # Define o destino exato dentro do servidor Linux, onde a imagem será construída
+          target: "/home/ec2-user/app"
 
-      # Passo 3: Executa a troca das pastas no Apache
-      - name: Apache Deployment via SSH
+      # Passo 3: Executa o script de deploy automatizado utilizando containers Docker
+      - name: Docker Deployment via SSH
         uses: appleboy/ssh-action@v1
         with:
           # Injeta o IP público atual da instância ec2, que está salvo no GitHub Secrets
@@ -96,23 +96,23 @@ jobs:
           username: ec2-user
           # Injeta o conteúdo do arquivo da SSH Key do Learner Lab guardado no GitHub Secrets
           key: ${{ secrets.EC2_SSH_KEY }}
-          # sudo rm -rf /home/ec2-user/site_backup: Exclui todos os arquivos da pasta do backup
-          # sudo cp -r /var/www/html /home/ec2-user/site_backup: Copia para a pasta do backup o que está atualmente na pasta principal do Apache
-          # sudo rm -rf /var/www/html/*: Limpa a pasta principal do Apache
-          # sudo cp -r /home/ec2-user/new_version/* /var/www/html/: Copia para a pasta principal do Apache o que está na pasta da nova versão
-          # sudo systemctl restart httpd: Reinicia o Apache
-          # sudo rm -rf /home/ec2-user/new_version: Limpa a pasta temporária de arquivos novos
+          # cd /home/ec2-user/app: Navega até a pasta em que os arquivos do projeto estão localizados
+          # docker tag site-estatico-devops:latest site-estatico-devops:backup || true: Cria uma cópia de segurança da imagem atual caso o novo build falhe
+          # docker build -t site-estatico-devops:latest .: Constrói a imagem do Docker a partir do Dockerfile
+          # docker stop container-site || true: Interrompe o container antigo
+          # docker rm container-site || true: Remove o container antigo
+          # docker run -d --name container-site -p 80:80 site-estatico-devops:latest: Inicializa o novo container em segundo plano, mapeando a porta 80 da ec2 para a 80 do container
           script: |
-            echo "Iniciando atualização do servidor Apache..."
-            sudo rm -rf /home/ec2-user/site_backup
-            sudo cp -r /var/www/html /home/ec2-user/site_backup
-            sudo rm -rf /var/www/html/*
-            sudo cp -r /home/ec2-user/new_version/* /var/www/html/
-            sudo systemctl restart httpd
-            sudo rm -rf /home/ec2-user/new_version
-            echo "Atualização do servidor Apache concluída com sucesso!"
+            echo "Iniciando script de deploy em container..."
+            cd /home/ec2-user/app
+            docker tag site-estatico-devops:latest site-estatico-devops:backup || true
+            docker build -t site-estatico-devops:latest .
+            docker stop container-site || true
+            docker rm container-site || true
+            docker run -d --name container-site -p 80:80 site-estatico-devops:latest
+            echo "Deploy em container concluído com sucesso!"
 
-      # Passo 4: Caso ocorra uma falha, ativa o rollback automaticamente com o que estava no backup
+      # Passo 4: Caso ocorra uma falha, ativa o rollback automaticamente restaurando a imagem estável
       - name: Trigger Rollback on Failure
         # Garante que este passo só rode se os passos anteriores derem algum erro
         if: failure()
@@ -124,12 +124,12 @@ jobs:
           username: ec2-user
           # Injeta o conteúdo do arquivo da SSH Key do Learner Lab guardado no GitHub Secrets
           key: ${{ secrets.EC2_SSH_KEY }}
-          # sudo rm -rf /var/www/html/*: Limpa a pasta que deu erro (pasta principal do Apache)
-          # sudo cp -r /home/ec2-user/site_backup/* /var/www/html/: Restaura a pasta de backup para a pasta principal do Apache
-          # sudo systemctl restart httpd: Força o Apache a reiniciar com a versão antiga estável
+          # docker stop container-site || true: Interrompe o container defeituoso
+          # docker rm container-site || true: Remove o container defeituoso
+          # docker run -d --name container-site -p 80:80 site-estatico-devops:backup: Inicializa um novo container utilizando a imagem estável de backup guardada anteriormente
           script: |
-            echo "O deploy falhou ou o Apache não reiniciou! Iniciando Rollback..."
-            sudo rm -rf /var/www/html/*
-            sudo cp -r /home/ec2-user/site_backup/* /var/www/html/
-            sudo systemctl restart httpd
+            echo "O deploy falhou! Iniciando Rollback..."
+            docker stop container-site || true
+            docker rm container-site || true
+            docker run -d --name container-site -p 80:80 site-estatico-devops:backup
             echo "Rollback concluído. O site foi restaurado para a versão anterior com sucesso!"
