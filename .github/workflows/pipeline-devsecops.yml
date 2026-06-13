@@ -44,20 +44,6 @@ jobs:
           # Injeta o endereço do servidor gratuito do SonarCloud configurado no GitHub Secrets
           SONAR_HOST_URL: ${{secrets.SONAR_HOST_URL}}
 
-      # Passo 6: Análise dinâmica de segurança com OWASP ZAP
-      - name: OWASP ZAP Scan
-        uses: zaproxy/action-baseline@v0.15.0
-        with:
-          # Alvo do OWASP ZAP (nesse caso, a máquina ec2)
-          target: "http://${{ secrets.EC2_HOST }}"
-
-          # Foi deixado como false para o pipeline não travar com erros comuns em sites estáticos. Em um pipeline real, deveria estar habilitado
-          fail_action: false
-
-          # Criação de um issue no GitHub com as vulnerabilidades encontradas
-          token: ${{ secrets.GITHUB_TOKEN }}
-          issue_title: "Relatório de Vulnerabilidades - OWASP ZAP"
-
   # Conjunto de tarefas chamado "deploy"
   deploy:
     # Especifica que o GitHub deve criar uma máquina virtual temporária com o Ubuntu mais recente para rodar os comandos
@@ -112,7 +98,21 @@ jobs:
             docker run -d --name container-site -p 80:80 site-estatico-devops:latest
             echo "Deploy em container concluído com sucesso!"
 
-      # Passo 4: Caso ocorra uma falha, ativa o rollback automaticamente restaurando a imagem estável
+      # Passo 4: Análise dinâmica de segurança com OWASP ZAP
+      - name: OWASP ZAP Scan
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          # Alvo do OWASP ZAP (nesse caso, a máquina ec2)
+          target: "http://${{ secrets.EC2_HOST }}"
+
+          # Foi deixado como false para o pipeline não travar com erros comuns em sites estáticos. Em um pipeline real, deveria estar habilitado
+          fail_action: false
+
+          # Criação de um issue no GitHub com as vulnerabilidades encontradas
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue_title: "Relatório de Vulnerabilidades - OWASP ZAP"
+
+      # Passo 5: Caso ocorra uma falha, ativa o rollback automaticamente restaurando a imagem estável
       - name: Trigger Rollback on Failure
         # Garante que este passo só rode se os passos anteriores derem algum erro
         if: failure()
