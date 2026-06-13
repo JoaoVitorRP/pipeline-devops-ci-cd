@@ -1,0 +1,83 @@
+# Versão da linguagem do CloudFormation que a AWS deve usar para ler este arquivo
+AWSTemplateFormatVersion: "2010-09-09"
+# Recursos que serão criados na nuvem
+Resources:
+  # Nome escolhido para identificar a máquina virtual no script
+  ServidorWebSite:
+    # Tipo do recurso (nesse caso, uma instância do ec2)
+    Type: AWS::EC2::Instance
+    # Propriedades e configurações específicas da máquina virtual
+    Properties:
+      # Sistema Operacional da máquina
+      ImageId: ami-0c101f26f147fa7fd
+      # Tamanho do hardware
+      InstanceType: t2.micro
+      # Vincula a chave pública SSH para permitir o acesso (chave padrão do Learner Lab)
+      KeyName: vockey
+      # Regras de firewall, fazendo um link direto com o recurso GrupoSegurancaWeb, definido mais abaixo
+      SecurityGroupIds:
+        - !Ref GrupoSegurancaWeb
+      # Script de automação executado pelo Linux assim que a máquina liga pela primeira vez
+      UserData:
+        # yum update -y: Atualiza todos os pacotes de segurança instalados no sistema operacional
+        # yum install -y httpd: Instala o servidor web Apache
+        # systemctl start httpd: Inicializa o serviço do servidor Apache imediatamente
+        # systemctl enable httpd: Configura o Apache para inicializar sozinho caso a máquina EC2 seja reiniciada
+        # chmod -R 777 /var/www/html: Dá permissão total na pasta padrão do Apache para que o pipeline do GitHub Actions consiga gravar os arquivos do site via SSH/SCP
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          chmod -R 777 /var/www/html
+
+  # Nome escolhido para identificar o firewall no script
+  GrupoSegurancaWeb:
+    # Informa à AWS que queremos criar um Security Group (Firewall)
+    Type: AWS::EC2::SecurityGroup
+    # Propriedades de configuração do firewall
+    Properties:
+      # Descrição do objetivo deste grupo de segurança
+      GroupDescription: Permite acesso HTTP (site) e SSH (deploy)
+      # Define o que tem permissão para acessar a máquina
+      SecurityGroupIngress:
+        # Permite o acesso ao site pelo navegador
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # Permite a conexão do pipeline do GitHub Actions para fazer o upload dos arquivos
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  # Nome escolhido para identificar o alarme no script
+  AlarmeCpuEC2:
+    # Informa à AWS que queremos criar um alarme no CloudWatch
+    Type: AWS::CloudWatch::Alarm
+    # Propriedades do alarme
+    Properties:
+      # Descrição do alarme
+      AlarmDescription: "Dispara um alerta se a CPU do servidor web passar de 80%"
+      # Métrica nativa do ec2 que será monitorada (nesse caso, utilização de CPU)
+      MetricName: CPUUtilization
+      # Serviço AWS que origina a métrica monitorada
+      Namespace: AWS/EC2
+      # Tipo de função estatística aplicada aos dados (calcula a média do período)
+      Statistic: Average
+      # Faz a avaliação a cada 300s = 5min
+      Period: 300
+      # Número de intervalos consecutivos que devem violar o limite para disparar o alarme
+      EvaluationPeriods: 1
+      # Limite de uso de CPU que gerará o alerta (nesse caso, 80%)
+      Threshold: 80
+      # Operador utilizado para a comparação (nesse caso, maior que ou igual ao limite acima)
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      # Especificação de exatamente qual recurso será monitorado por este alarme
+      Dimensions:
+        # Define que o filtro de monitoramento será baseado no ID da instância
+        - Name: InstanceId
+          # Vincula o alarme diretamente à máquina ec2 criada
+          Value: !Ref ServidorWebSite

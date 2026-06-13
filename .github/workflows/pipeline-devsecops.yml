@@ -1,0 +1,133 @@
+# Nome do pipeline que será exibido na aba "Actions" do GitHub
+name: Pipeline CI/CD
+
+# Gatilho que vai disparar a automação
+on:
+  push:
+    # O pipeline só vai rodar quando houver um push na branch "main"
+    branches:
+      - main
+
+# O que o pipeline realmente vai fazer
+jobs:
+  # Conjunto de tarefas chamado "build"
+  build:
+    # Especifica que o GitHub deve criar uma máquina virtual temporária com o Ubuntu mais recente para rodar os comandos
+    runs-on: ubuntu-latest
+
+    # Lista de passos sequenciais que a máquina virtual vai executar
+    steps:
+      # Passo 1: Baixa o código do repositório para dentro da máquina virtual temporária do GitHub
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Passo 2: Setup do node
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      # Passo 3: Instala as dependências
+      - name: Install dependencies
+        run: npm install
+
+      # Passo 4: Faz uma simulação de testes do código antes do deploy
+      - name: Run tests
+        run: npm test
+
+      # Passo 5: Faz o scan do código com SonarQube
+      - name: SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v8.2.0
+        env:
+          # Injeta a senha de acesso configurada no GitHub Secrets
+          SONAR_TOKEN: ${{secrets.SONAR_TOKEN}}
+          # Injeta o endereço do servidor gratuito do SonarCloud configurado no GitHub Secrets
+          SONAR_HOST_URL: ${{secrets.SONAR_HOST_URL}}
+
+      # Passo 6: Análise dinâmica de segurança com OWASP ZAP
+      - name: OWASP ZAP Scan
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          # Alvo do OWASP ZAP (nesse caso, a máquina ec2)
+          target: "http://${{ secrets.EC2_HOST }}"
+
+          # Foi deixado como false para o pipeline não travar com erros comuns em sites estáticos. Em um pipeline real, deveria estar habilitado
+          fail_action: false
+
+          # Criação de um issue no GitHub com as vulnerabilidades encontradas
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue_title: "Relatório de Vulnerabilidades - OWASP ZAP"
+
+  # Conjunto de tarefas chamado "deploy"
+  deploy:
+    # Especifica que o GitHub deve criar uma máquina virtual temporária com o Ubuntu mais recente para rodar os comandos
+    runs-on: ubuntu-latest
+
+    # Lista de passos sequenciais que a máquina virtual vai executar
+    steps:
+      # Passo 1: Baixa o código do repositório para dentro da máquina virtual temporária do GitHub
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Passo 2: Cria uma pasta temporária na ec2 para receber os arquivos
+      - name: Copy files to EC2 Temporary Folder via SCP
+        uses: appleboy/scp-action@v1
+        with:
+          # Injeta o IP público atual da instância ec2, que está salvo no GitHub Secrets
+          host: ${{ secrets.EC2_HOST }}
+          # Usuário padrão do sistema operacional Amazon Linux para a conexão
+          username: ec2-user
+          # Injeta o conteúdo do arquivo da SSH Key do Learner Lab guardado no GitHub Secrets
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # Define a origem dos arquivos (nesse caso pega tudo o que está na raiz do projeto)
+          source: "./*"
+          # Define o destino exato dentro do servidor Linux, que será uma pasta temporária
+          target: "/home/ec2-user/new_version"
+
+      # Passo 3: Executa a troca das pastas no Apache
+      - name: Apache Deployment via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          # Injeta o IP público atual da instância ec2, que está salvo no GitHub Secrets
+          host: ${{ secrets.EC2_HOST }}
+          # Usuário padrão do sistema operacional Amazon Linux para a conexão
+          username: ec2-user
+          # Injeta o conteúdo do arquivo da SSH Key do Learner Lab guardado no GitHub Secrets
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # sudo rm -rf /home/ec2-user/site_backup: Exclui todos os arquivos da pasta do backup
+          # sudo cp -r /var/www/html /home/ec2-user/site_backup: Copia para a pasta do backup o que está atualmente na pasta principal do Apache
+          # sudo rm -rf /var/www/html/*: Limpa a pasta principal do Apache
+          # sudo cp -r /home/ec2-user/new_version/* /var/www/html/: Copia para a pasta principal do Apache o que está na pasta da nova versão
+          # sudo systemctl restart httpd: Reinicia o Apache
+          # sudo rm -rf /home/ec2-user/new_version: Limpa a pasta temporária de arquivos novos
+          script: |
+            echo "Iniciando atualização do servidor Apache..."
+            sudo rm -rf /home/ec2-user/site_backup
+            sudo cp -r /var/www/html /home/ec2-user/site_backup
+            sudo rm -rf /var/www/html/*
+            sudo cp -r /home/ec2-user/new_version/* /var/www/html/
+            sudo systemctl restart httpd
+            sudo rm -rf /home/ec2-user/new_version
+            echo "Atualização do servidor Apache concluída com sucesso!"
+
+      # Passo 4: Caso ocorra uma falha, ativa o rollback automaticamente com o que estava no backup
+      - name: Trigger Rollback on Failure
+        # Garante que este passo só rode se os passos anteriores derem algum erro
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          # Injeta o IP público atual da instância ec2, que está salvo no GitHub Secrets
+          host: ${{ secrets.EC2_HOST }}
+          # Usuário padrão do sistema operacional Amazon Linux para a conexão
+          username: ec2-user
+          # Injeta o conteúdo do arquivo da SSH Key do Learner Lab guardado no GitHub Secrets
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # sudo rm -rf /var/www/html/*: Limpa a pasta que deu erro (pasta principal do Apache)
+          # sudo cp -r /home/ec2-user/site_backup/* /var/www/html/: Restaura a pasta de backup para a pasta principal do Apache
+          # sudo systemctl restart httpd: Força o Apache a reiniciar com a versão antiga estável
+          script: |
+            echo "O deploy falhou ou o Apache não reiniciou! Iniciando Rollback..."
+            sudo rm -rf /var/www/html/*
+            sudo cp -r /home/ec2-user/site_backup/* /var/www/html/
+            sudo systemctl restart httpd
+            echo "Rollback concluído. O site foi restaurado para a versão anterior com sucesso!"

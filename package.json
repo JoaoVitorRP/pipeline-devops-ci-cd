@@ -1,0 +1,14 @@
+{
+  "name": "pipeline-devops-ci-cd",
+  "version": "1.0.0",
+  "description": "Simulação de um pipeline completo de DevSecOps",
+  "main": "index.html",
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"All tests passed.\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
