@@ -62,6 +62,8 @@ jobs:
   deploy:
     # Especifica que o GitHub deve criar uma máquina virtual temporária com o Ubuntu mais recente para rodar os comandos
     runs-on: ubuntu-latest
+    # Só irá rodar após a etapa de build terminar com sucesso
+    needs: build
 
     # Lista de passos sequenciais que a máquina virtual vai executar
     steps:
